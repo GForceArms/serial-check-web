@@ -100,7 +100,7 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 .btn:active { transform: translateY(1px); }
 .btn.alt { background: transparent; color: inherit; border: 2px solid currentColor; min-height: 56px; font-size: 18px; }
 .btn.light { background: #fff; color: var(--ink); }
-:is(.btn, .link, .choice):focus-visible, #wedge:focus-visible { outline: 4px solid #FFC300; outline-offset: 3px; }
+:is(.btn, .link, .choice, .wedge-field):focus-visible { outline: 4px solid #FFC300; outline-offset: 3px; }
 
 /* start screen scanner choice */
 .choices { display: grid; gap: 10px; margin: 18px 0 8px; }
@@ -152,8 +152,13 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 
 @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .btn:active { transform: none; } }
 
-/* hidden input that receives the handheld scanner's keystrokes */
-#wedge { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; pointer-events: none; }
+/* field that receives the handheld scanner's keystrokes (shown, so focus is reliable and scans are visible) */
+.wedge-field {
+  width: 100%; font: 700 26px var(--mono); padding: 14px 16px; margin: 4px 0 8px;
+  background: #fff; color: var(--ink); border: 3px dashed var(--ink); border-radius: 10px; caret-color: transparent;
+}
+.wedge-field:focus { border-style: solid; }
+.sub.small { font-size: 15px; margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -163,7 +168,6 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
   <div class="roundlabel" id="roundLabel"></div>
   <main id="screen"></main>
 </div>
-<input id="wedge" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Scanner input">
 <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
 
 <script>
@@ -251,19 +255,37 @@ function resetBox() {
 }
 
 /* ---------- hardware scanner (keyboard mode) ---------- */
-const wedge = $('#wedge');
-let wedgeOn = false, wedgeCb = null, wedgeTimer = null;
-function focusWedge() { if (wedgeOn) wedge.focus({ preventScroll: true }); }
-function armWedge(cb) { wedgeOn = true; wedgeCb = cb; wedge.value = ''; focusWedge(); }
-function disarmWedge() { wedgeOn = false; wedgeCb = null; clearTimeout(wedgeTimer); wedge.value = ''; wedge.blur(); }
-function commitWedge() {
-  clearTimeout(wedgeTimer);
-  const v = wedge.value.trim(); wedge.value = '';
+let wedgeEl = null, wedgeOn = false, wedgeCb = null, wedgeTimer = null, keyBuf = '', sigCount = 0, sigEl = null;
+function signal() { sigCount++; if (sigEl) sigEl.textContent = `Scanner signals received: ${sigCount}`; }
+function focusWedge() {
+  if (wedgeOn && wedgeEl && document.activeElement !== wedgeEl) { try { wedgeEl.focus({ preventScroll: true }); } catch {} }
+}
+function commitScan(v) {
+  v = String(v || '').trim();
+  clearTimeout(wedgeTimer); keyBuf = '';
+  if (wedgeEl) wedgeEl.value = '';
   if (v && wedgeOn && wedgeCb) wedgeCb(v);
 }
-wedge.addEventListener('input', () => { if (!wedgeOn) return; clearTimeout(wedgeTimer); wedgeTimer = setTimeout(commitWedge, 150); });
-wedge.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitWedge(); } });
-wedge.addEventListener('blur', () => { if (wedgeOn) setTimeout(focusWedge, 60); });
+function armWedge(cb, el, counterEl) {
+  wedgeOn = true; wedgeCb = cb; wedgeEl = el; sigEl = counterEl; sigCount = 0; keyBuf = '';
+  el.addEventListener('input', () => { if (!wedgeOn) return; signal(); clearTimeout(wedgeTimer); wedgeTimer = setTimeout(() => commitScan(el.value), 150); });
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitScan(el.value || keyBuf); } });
+  el.addEventListener('blur', () => { if (wedgeOn) setTimeout(focusWedge, 80); });
+  focusWedge(); setTimeout(focusWedge, 200);
+}
+function disarmWedge() {
+  wedgeOn = false; wedgeCb = null; clearTimeout(wedgeTimer); keyBuf = ''; sigEl = null;
+  if (wedgeEl) { try { wedgeEl.blur(); } catch {} }
+  wedgeEl = null;
+}
+// Backup: the scanner's keys also count if they land on the page while the field isn't focused.
+document.addEventListener('keydown', (e) => {
+  if (!wedgeOn || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.target === wedgeEl) { signal(); return; }   // the field handles its own text
+  signal();
+  if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitScan(keyBuf); return; }
+  if (e.key && e.key.length === 1) { keyBuf += e.key; clearTimeout(wedgeTimer); wedgeTimer = setTimeout(() => commitScan(keyBuf), 150); }
+}, true);
 
 /* ---------- camera barcode scanner ---------- */
 let camStream = null, camRun = 0;
@@ -461,9 +483,13 @@ function scanScreen(which) {
   const trig = S.mode === 'trigger';
   main.append(h('h2', { text: `Scan serial ${which}` }));
   if (which === 2) main.append(h('div', { class: 'chip' }, h('div', { class: 'label', text: 'Serial 1' }), h('div', { class: 'serial', text: S.s1 })));
-  let video = null, statusEl = null;
+  let video = null, statusEl = null, field = null, counter = null;
   if (trig) {
-    main.append(h('div', { class: 'trigger-note', text: 'Pull the scanner trigger' }));
+    field = h('input', { id: 'wedge', class: 'wedge-field', type: 'text', inputmode: 'none', autocomplete: 'off', autocorrect: 'off',
+      autocapitalize: 'off', spellcheck: 'false', placeholder: 'Scan appears here', 'aria-label': 'Scanner input' });
+    counter = h('div', { class: 'sub small', text: 'Scanner signals received: 0' });
+    main.append(h('div', { class: 'trigger-note', text: 'Pull the scanner trigger' }), field, counter,
+      h('p', { class: 'sub small', text: 'If the number stays at 0 when you pull the trigger, the scanner is not sending keystrokes. Set it to keyboard output.' }));
   } else {
     video = h('video', { autoplay: true, playsinline: true, muted: true });
     statusEl = h('div', { class: 'status', 'aria-live': 'polite' });
@@ -482,7 +508,7 @@ function scanScreen(which) {
       go(norm(S.s1) === norm(S.s2) ? 'match' : 'mismatch');
     }
   };
-  if (trig) armWedge(onCode);
+  if (trig) armWedge(onCode, field, counter);
   else startCamera(video, (t, warn) => { statusEl.textContent = t; statusEl.classList.toggle('warn', !!warn); }, onCode, which === 2 ? norm(S.s1) : null);
 }
 

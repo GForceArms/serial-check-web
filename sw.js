@@ -1,5 +1,5 @@
 // Serial Check offline cache. Bump CACHE when you change any file so phones pick up the update.
-const CACHE = 'serial-check-v4';
+const CACHE = 'serial-check-v5';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png',
