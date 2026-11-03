@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#14171A">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.webmanifest">
@@ -159,6 +159,8 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 }
 .wedge-field:focus { border-style: solid; }
 .sub.small { font-size: 15px; margin-bottom: 6px; }
+.dock { margin-top: 12px; padding-top: 10px; border-top: 3px solid var(--ink); }
+.dock-label { display: block; font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 .dbg { margin: 2px 0 10px; font-size: 15px; }
 .dbg summary { cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; padding: 6px 0; }
 .scanlog { font: 13px/1.3 var(--mono); background: #fff; color: var(--ink); border: 2px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; min-height: 3.2em; }
@@ -170,6 +172,12 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
   <div class="tracker" id="tracker" aria-hidden="true"></div>
   <div class="roundlabel" id="roundLabel"></div>
   <main id="screen"></main>
+  <div id="dock" class="dock" hidden>
+    <label class="dock-label" for="wedge">Scanner box. Tap it once if the keyboard isn't showing, then pull the trigger.</label>
+    <input id="wedge" class="wedge-field" type="text" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="Scan appears here">
+    <div id="sig" class="sub small">Scanner signals received: 0</div>
+    <details class="dbg"><summary>Scanner details (for troubleshooting)</summary><pre id="scanlog" class="scanlog">Nothing received yet.</pre></details>
+  </div>
 </div>
 <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
 
@@ -258,11 +266,14 @@ function resetBox() {
 }
 
 /* ---------- hardware scanner (keyboard mode) ---------- */
-let wedgeEl = null, wedgeOn = false, wedgeCb = null, wedgeTimer = null;
-let keyBuf = '', compBuf = '', pressBuf = '', txtBuf = '', sigCount = 0, sigEl = null, logEl = null, evLog = [];
+// The scan box lives in a fixed dock outside the screens. It is never removed between scan 1 and
+// scan 2, so Android keeps the keyboard connection that many scanners use to type the barcode.
+const wedgeEl = $('#wedge'), dock = $('#dock'), sigEl = $('#sig'), logEl = $('#scanlog');
+let wedgeOn = false, wedgeCb = null, wedgeTimer = null;
+let keyBuf = '', compBuf = '', pressBuf = '', txtBuf = '', sigCount = 0, evLog = [];
 const IDLE_MS = 300;   // a scan with no Enter at the end counts after this much quiet
-function signal() { sigCount++; if (sigEl) sigEl.textContent = `Scanner signals received: ${sigCount}`; }
-function logEv(t) { evLog.push(t); if (evLog.length > 16) evLog.shift(); if (logEl) logEl.textContent = evLog.join('\n'); }
+function signal() { sigCount++; sigEl.textContent = `Scanner signals received: ${sigCount}`; }
+function logEv(t) { evLog.push(t); if (evLog.length > 16) evLog.shift(); logEl.textContent = evLog.join('\n'); }
 const show = (v) => (v == null || v === '' ? '-' : JSON.stringify(String(v)).slice(0, 26));
 function charFromKey(e) {
   if (e.key && e.key.length === 1) return e.key;
@@ -272,40 +283,41 @@ function charFromKey(e) {
   if (kc >= 96 && kc <= 105) return String(kc - 96);
   return '';
 }
-// The scan is whichever source captured the most: the field's text, the typed keys, or composed text.
+// The scan is whichever source captured the most: the box's text, the typed keys, or composed text.
 function current() {
-  return [wedgeEl ? wedgeEl.value : '', keyBuf, compBuf, pressBuf, txtBuf].map((x) => String(x || '').trim()).sort((a, b) => b.length - a.length)[0];
+  return [wedgeEl.value, keyBuf, compBuf, pressBuf, txtBuf].map((x) => String(x || '').trim()).sort((a, b) => b.length - a.length)[0];
 }
 function focusWedge() {
-  if (wedgeOn && wedgeEl && document.activeElement !== wedgeEl) { try { wedgeEl.focus({ preventScroll: true }); } catch {} }
+  if (wedgeOn && document.activeElement !== wedgeEl) { try { wedgeEl.focus({ preventScroll: true }); } catch {} }
 }
+function clearBuffers() { clearTimeout(wedgeTimer); keyBuf = ''; compBuf = ''; pressBuf = ''; txtBuf = ''; }
 function commitScan(v) {
   v = String(v || '').trim();
-  clearTimeout(wedgeTimer); keyBuf = ''; compBuf = ''; pressBuf = ''; txtBuf = '';
-  if (wedgeEl) wedgeEl.value = '';
+  clearBuffers(); wedgeEl.value = '';
   if (v && wedgeOn && wedgeCb) wedgeCb(v);
 }
 function schedule() { clearTimeout(wedgeTimer); wedgeTimer = setTimeout(() => commitScan(current()), IDLE_MS); }
-function armWedge(cb, el, counterEl, logElement) {
-  wedgeOn = true; wedgeCb = cb; wedgeEl = el; sigEl = counterEl; logEl = logElement;
-  sigCount = 0; keyBuf = ''; compBuf = ''; pressBuf = ''; txtBuf = ''; evLog = [];
-  el.addEventListener('beforeinput', (e) => logEv(`beforeinput ${e.inputType} ${show(e.data)}`));
-  el.addEventListener('input', (e) => { if (!wedgeOn) return; signal(); logEv(`input ${e.inputType || ''} ${show(e.data)} value=${show(el.value)}`); schedule(); });
-  el.addEventListener('compositionupdate', (e) => { if (e.data) compBuf = e.data; logEv(`compose ${show(e.data)}`); schedule(); });
-  el.addEventListener('compositionend', (e) => { if (e.data) compBuf = e.data; logEv(`composeend ${show(e.data)}`); schedule(); });
-  el.addEventListener('textInput', (e) => { if (e.data) txtBuf += e.data; signal(); logEv(`textInput ${show(e.data)}`); schedule(); });
-  el.addEventListener('paste', (e) => {
-    const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
-    logEv(`paste ${show(t)}`); if (t) { e.preventDefault(); commitScan(t); }
-  });
-  el.addEventListener('blur', () => { if (wedgeOn) setTimeout(focusWedge, 80); });
+function armWedge(cb) {
+  wedgeOn = true; wedgeCb = cb; clearBuffers(); wedgeEl.value = '';
+  sigCount = 0; evLog = []; sigEl.textContent = 'Scanner signals received: 0'; logEl.textContent = 'Nothing received yet.';
+  dock.hidden = false;
   focusWedge(); setTimeout(focusWedge, 200);
 }
-function disarmWedge() {
-  wedgeOn = false; wedgeCb = null; clearTimeout(wedgeTimer); keyBuf = ''; compBuf = ''; pressBuf = ''; txtBuf = ''; sigEl = null; logEl = null;
-  if (wedgeEl) { try { wedgeEl.blur(); } catch {} }
-  wedgeEl = null;
+function disarmWedge(keepOpen) {       // keepOpen: the next screen is also a trigger scan, so keep focus
+  wedgeOn = false; wedgeCb = null; clearBuffers();
+  if (!keepOpen) { try { wedgeEl.blur(); } catch {} wedgeEl.value = ''; dock.hidden = true; }
 }
+wedgeEl.addEventListener('beforeinput', (e) => { if (wedgeOn) logEv(`beforeinput ${e.inputType} ${show(e.data)}`); });
+wedgeEl.addEventListener('input', (e) => { if (!wedgeOn) return; signal(); logEv(`input ${e.inputType || ''} ${show(e.data)} value=${show(wedgeEl.value)}`); schedule(); });
+wedgeEl.addEventListener('compositionupdate', (e) => { if (!wedgeOn) return; if (e.data) compBuf = e.data; logEv(`compose ${show(e.data)}`); schedule(); });
+wedgeEl.addEventListener('compositionend', (e) => { if (!wedgeOn) return; if (e.data) compBuf = e.data; logEv(`composeend ${show(e.data)}`); schedule(); });
+wedgeEl.addEventListener('textInput', (e) => { if (!wedgeOn) return; if (e.data) txtBuf += e.data; signal(); logEv(`textInput ${show(e.data)}`); schedule(); });
+wedgeEl.addEventListener('paste', (e) => {
+  if (!wedgeOn) return;
+  const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  logEv(`paste ${show(t)}`); if (t) { e.preventDefault(); commitScan(t); }
+});
+wedgeEl.addEventListener('blur', () => { if (wedgeOn) setTimeout(focusWedge, 80); });
 document.addEventListener('keypress', (e) => {
   if (!wedgeOn) return;
   signal();
@@ -314,7 +326,7 @@ document.addEventListener('keypress', (e) => {
   if (ch) { pressBuf += ch; schedule(); }
 }, true);
 document.addEventListener('keyup', (e) => { if (wedgeOn) logEv(`up ${show(e.key)} kc=${e.keyCode}`); }, true);
-// Every key the scanner sends is seen here, whether or not the field has focus.
+// Every key the scanner sends is seen here, whether or not the box has focus.
 document.addEventListener('keydown', (e) => {
   if (!wedgeOn || e.ctrlKey || e.altKey || e.metaKey) return;
   signal();
@@ -473,7 +485,7 @@ function go(name) {
   currentGo++;
   S.screen = name;
   if (name !== 'bad') S.retakeIdx = null;
-  disarmWedge();
+  disarmWedge((name === 'scan1' || name === 'scan2') && S.mode === 'trigger');
   if ((name !== 'scan1' && name !== 'scan2') || S.mode === 'trigger') stopCamera();
   document.body.classList.toggle('theme-ok', name === 'match' || name === 'good');
   document.body.classList.toggle('theme-bad', name === 'mismatch' || name === 'bad');
@@ -520,22 +532,17 @@ function scanScreen(which) {
   const trig = S.mode === 'trigger';
   main.append(h('h2', { text: `Scan serial ${which}` }));
   if (which === 2) main.append(h('div', { class: 'chip' }, h('div', { class: 'label', text: 'Serial 1' }), h('div', { class: 'serial', text: S.s1 })));
-  let video = null, statusEl = null, field = null, counter = null, logPre = null;
+  let video = null, statusEl = null;
   if (trig) {
-    field = h('input', { id: 'wedge', class: 'wedge-field', type: 'text', inputmode: 'text', virtualkeyboardpolicy: 'manual', autocomplete: 'off', autocorrect: 'off',
-      autocapitalize: 'off', spellcheck: 'false', enterkeyhint: 'done', placeholder: 'Scan appears here', 'aria-label': 'Scanner input' });
-    counter = h('div', { class: 'sub small', text: 'Scanner signals received: 0' });
-    logPre = h('pre', { class: 'scanlog', text: 'Nothing received yet.' });
-    main.append(h('div', { class: 'trigger-note', text: 'Pull the scanner trigger' }), field, counter,
-      h('details', { class: 'dbg' }, h('summary', { text: 'Scanner details (for troubleshooting)' }), logPre),
-      h('p', { class: 'sub small', text: 'If the number stays at 0 when you pull the trigger, the scanner is not sending keystrokes. Set it to keyboard output.' }));
+    main.append(h('div', { class: 'trigger-note', text: 'Pull the scanner trigger' }),
+      h('p', { class: 'sub small', text: 'Keep the scanner box at the bottom of the screen selected. If nothing happens, tap it once.' }));
   } else {
     video = h('video', { autoplay: true, playsinline: true, muted: true });
     statusEl = h('div', { class: 'status', 'aria-live': 'polite' });
     main.append(h('div', { class: 'cam' }, video), statusEl);
   }
   main.append(h('div', { class: 'actions' },
-    trig ? h('button', { class: 'btn', onclick: () => { const v = current(); if (v) commitScan(v); else counter.textContent = 'Nothing received yet. Pull the trigger first.'; } }, 'Use what the box shows') : null,
+    trig ? h('button', { class: 'btn', onclick: () => { const v = current(); if (v) commitScan(v); else sigEl.textContent = 'Nothing received yet. Pull the trigger first.'; } }, 'Use what the box shows') : null,
     h('button', { class: 'btn alt', onclick: () => { S.mode = trig ? 'camera' : 'trigger'; go(which === 1 ? 'scan1' : 'scan2'); } },
       trig ? 'Use camera instead' : 'Use scanner trigger instead')));
 
@@ -548,7 +555,7 @@ function scanScreen(which) {
       go(norm(S.s1) === norm(S.s2) ? 'match' : 'mismatch');
     }
   };
-  if (trig) armWedge(onCode, field, counter, logPre);
+  if (trig) armWedge(onCode);
   else startCamera(video, (t, warn) => { statusEl.textContent = t; statusEl.classList.toggle('warn', !!warn); }, onCode, which === 2 ? norm(S.s1) : null);
 }
 
