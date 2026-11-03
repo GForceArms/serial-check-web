@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14171A">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Serial Check</title>
+<style>
+:root {
+  --ink: #14171A;
+  --paper: #F2F3EF;
+  --line: #C4C8BF;
+  --mute: #566058;
+  --scan: #0A4FD6;
+  --go: #14803C;
+  --stop: #C0262D;
+  --bg: var(--paper);
+  --fg: var(--ink);
+  --seg-off: var(--line);
+  --seg-now: var(--ink);
+  --seg-done: var(--go);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Roboto Mono", "Droid Sans Mono", Consolas, monospace;
+}
+body.theme-ok  { --bg: var(--go);   --fg: #fff; --seg-off: rgba(255,255,255,.35); --seg-now: #fff; --seg-done: #fff; }
+body.theme-bad { --bg: var(--stop); --fg: #fff; --seg-off: rgba(255,255,255,.35); --seg-now: #fff; --seg-done: #fff; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 18px;
+  line-height: 1.35;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+#app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: max(14px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* header + round tracker */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; }
+.brand { font-weight: 800; font-size: 19px; letter-spacing: -0.01em; }
+.link {
+  background: none; border: 0; color: inherit; font: inherit; font-size: 16px; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px; padding: 8px 0 8px 12px; cursor: pointer;
+}
+.tracker { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; }
+.seg { flex: 1; height: 14px; border-radius: 3px; background: var(--seg-off); }
+.seg.done { background: var(--seg-done); }
+.seg.now  { background: var(--seg-now); }
+.roundlabel { font-size: 15px; font-weight: 700; margin: 8px 0 0; min-height: 20px; }
+
+/* content */
+main { flex: 1; display: flex; flex-direction: column; padding-top: 18px; min-height: 0; }
+h1, h2 { margin: 0 0 10px; letter-spacing: -0.02em; line-height: 1.08; }
+h1 { font-size: 40px; font-weight: 800; }
+h2 { font-size: 34px; font-weight: 800; }
+p { margin: 0 0 12px; }
+.sub { color: var(--mute); font-size: 18px; }
+body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
+
+.serial {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: clamp(26px, 9vw, 44px);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  line-height: 1.1;
+}
+.pair { display: grid; gap: 14px; margin: 14px 0 8px; }
+.pair .label { font-size: 15px; font-weight: 600; opacity: .88; margin-bottom: 2px; }
+.chip {
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 4px 0 14px;
+}
+.chip .label { font-size: 15px; color: var(--mute); font-weight: 600; }
+.chip .serial { font-size: clamp(22px, 7vw, 32px); }
+
+.actions { margin-top: auto; padding-top: 18px; display: grid; gap: 10px; }
+.btn {
+  appearance: none; border: 0; border-radius: 12px;
+  min-height: 64px; width: 100%;
+  font: inherit; font-size: 21px; font-weight: 700;
+  background: var(--scan); color: #fff; cursor: pointer;
+}
+.btn:active { transform: translateY(1px); }
+.btn.alt { background: transparent; color: inherit; border: 2px solid currentColor; min-height: 56px; font-size: 18px; }
+.btn.light { background: #fff; color: var(--ink); }
+:is(.btn, .link, .choice):focus-visible, #wedge:focus-visible { outline: 4px solid #FFC300; outline-offset: 3px; }
+
+/* start screen scanner choice */
+.choices { display: grid; gap: 10px; margin: 18px 0 8px; }
+.choice {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: #fff; color: var(--ink); font: inherit;
+  border: 2px solid var(--line); border-radius: 12px; padding: 14px 16px;
+}
+.choice b { display: block; font-size: 20px; }
+.choice span { color: var(--mute); font-size: 16px; }
+.choice[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); }
+
+/* photo + camera */
+.preview { width: 100%; max-height: 46dvh; object-fit: contain; border-radius: 12px; background: #000; margin: 6px 0 4px; }
+.cam {
+  position: relative; border-radius: 14px; overflow: hidden; background: #000;
+  height: min(46dvh, 420px); margin: 6px 0 10px;
+}
+.cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cam::after {
+  content: ""; position: absolute; left: 10%; right: 10%; top: 34%; height: 32%;
+  border: 3px solid #fff; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(0,0,0,.38);
+}
+.status { min-height: 26px; font-weight: 600; }
+.status.warn { color: var(--stop); }
+
+.trigger-note {
+  border-left: 8px solid var(--ink); padding: 6px 0 6px 16px; margin: 10px 0 14px;
+  font-size: 26px; font-weight: 700; line-height: 1.15;
+}
+
+/* checking */
+.bar { height: 16px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 14px 0; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .25s linear; }
+
+/* final */
+.rounds { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.rounds li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+  border-top: 1px solid rgba(255,255,255,.45); padding-top: 8px; }
+.rounds .serial { font-size: clamp(20px, 6vw, 28px); }
+.fail { border-top: 1px solid rgba(255,255,255,.55); padding: 12px 0 6px; }
+.fail h3 { margin: 0 0 4px; font-size: 20px; }
+.fail .label { font-size: 15px; opacity: .9; margin-top: 6px; }
+.fail .serial { font-size: clamp(18px, 5.6vw, 26px); }
+.fail img { width: 100%; max-height: 180px; object-fit: contain; border-radius: 8px; background: rgba(0,0,0,.35); margin-top: 8px; }
+.err { background: #fff; color: var(--ink); border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
+
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .btn:active { transform: none; } }
+
+/* hidden input that receives the handheld scanner's keystrokes */
+#wedge { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="top"><div class="brand">Serial Check</div><div id="topAction"></div></div>
+  <div class="tracker" id="tracker" aria-hidden="true"></div>
+  <div class="roundlabel" id="roundLabel"></div>
+  <main id="screen"></main>
+</div>
+<input id="wedge" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Scanner input">
+<input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+
+<script>
+(() => {
+'use strict';
+
+const ROUNDS = 5;
+const $ = (s) => document.querySelector(s);
+
+/* ---------- helpers ---------- */
+function h(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k === 'text') n.textContent = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) n.append(k.nodeType ? k : document.createTextNode(k));
+  return n;
+}
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+// Serials never contain O or I, so read O as 0 and I as 1. Ignore case, spaces, dashes.
+const norm = (s) => String(s || '').toUpperCase().replace(/[\s\-_.]/g, '').replace(/O/g, '0').replace(/I/g, '1');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load ' + src));
+    document.head.append(s);
+  });
+}
+const abs = (p) => new URL(p, location.href).href;
+
+/* ---------- feedback: sound, vibration, screen awake ---------- */
+let actx = null;
+function unlockAudio() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch {}
+}
+function tone(freq, ms, delay = 0, type = 'sine', vol = 0.25) {
+  if (!actx) return;
+  const t = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + ms / 1000 + 0.02);
+}
+function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch {} }
+const feedback = {
+  scan() { vibrate(40); tone(1200, 70, 0, 'sine', 0.15); },
+  good() { vibrate(250); tone(880, 200); },
+  bad()  { vibrate([200,100,200,100,200,100,200,100,200]); for (let i = 0; i < 5; i++) tone(220, 200, i * 0.3, 'square', 0.2); }
+};
+let wakeLock = null;
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.screen !== 'start') keepAwake(); });
+
+/* ---------- state ---------- */
+const S = {
+  screen: 'start',
+  defaultMode: store.get('sc_mode') === 'camera' ? 'camera' : 'trigger',
+  mode: 'trigger',
+  round: 1,
+  photos: [],     // { blob, url } per round
+  serials: [],    // accepted serial (normalized) per round
+  s1: null, s2: null
+};
+function resetBox() {
+  S.photos.forEach((p) => p && URL.revokeObjectURL(p.url));
+  Object.assign(S, { round: 1, photos: [], serials: [], s1: null, s2: null, mode: S.defaultMode });
+}
+
+/* ---------- hardware scanner (keyboard mode) ---------- */
+const wedge = $('#wedge');
+let wedgeOn = false, wedgeCb = null, wedgeTimer = null;
+function focusWedge() { if (wedgeOn) wedge.focus({ preventScroll: true }); }
+function armWedge(cb) { wedgeOn = true; wedgeCb = cb; wedge.value = ''; focusWedge(); }
+function disarmWedge() { wedgeOn = false; wedgeCb = null; clearTimeout(wedgeTimer); wedge.value = ''; wedge.blur(); }
+function commitWedge() {
+  clearTimeout(wedgeTimer);
+  const v = wedge.value.trim(); wedge.value = '';
+  if (v && wedgeOn && wedgeCb) wedgeCb(v);
+}
+wedge.addEventListener('input', () => { if (!wedgeOn) return; clearTimeout(wedgeTimer); wedgeTimer = setTimeout(commitWedge, 150); });
+wedge.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitWedge(); } });
+wedge.addEventListener('blur', () => { if (wedgeOn) setTimeout(focusWedge, 60); });
+
+/* ---------- camera barcode scanner ---------- */
+let camStream = null, camRun = 0;
+async function ensureStream() {
+  if (camStream && camStream.active) return camStream;
+  camStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
+  });
+  return camStream;
+}
+function stopCamera() {
+  camRun++;
+  if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+}
+let detectorPromise = null;
+function getDetector() {
+  if (detectorPromise) return detectorPromise;
+  detectorPromise = (async () => {
+    if ('BarcodeDetector' in window) {
+      try {
+        const sup = await BarcodeDetector.getSupportedFormats();
+        const want = ['code_128','code_39','code_93','codabar','ean_13','ean_8','itf','upc_a','upc_e','qr_code','data_matrix','pdf417','aztec'].filter((f) => sup.includes(f));
+        const d = new BarcodeDetector(want.length ? { formats: want } : undefined);
+        return async (video) => (await d.detect(video)).map((b) => b.rawValue).filter(Boolean);
+      } catch {}
+    }
+    // Backup reader for browsers without BarcodeDetector. Reads one barcode per frame.
+    await loadScript('zxing.min.js');
+    const hints = new Map(); hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.MultiFormatReader(); reader.setHints(hints);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    return async (video) => {
+      const w = video.videoWidth, hgt = video.videoHeight;
+      if (!w) return [];
+      canvas.width = w; canvas.height = hgt; ctx.drawImage(video, 0, 0, w, hgt);
+      try {
+        const src = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+        return [reader.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src))).getText()];
+      } catch { return []; }
+    };
+  })();
+  detectorPromise.catch(() => { detectorPromise = null; });
+  return detectorPromise;
+}
+/* Safeguards (deliberate): a barcode must read the same in two frames in a row,
+   two barcodes in view are ignored, and after serial 1 the same barcode only counts
+   again once the camera has looked away. */
+async function startCamera(video, setStatus, onCode, blockNorm) {
+  const run = ++camRun;
+  try {
+    const stream = await ensureStream();
+    if (run !== camRun) return;
+    video.srcObject = stream; video.setAttribute('playsinline', ''); video.muted = true;
+    await video.play();
+    setStatus('Starting scanner…');
+    const detect = await getDetector();
+    let last = null, lookedAway = !blockNorm;
+    setStatus('Point the camera at the barcode');
+    while (run === camRun) {
+      if (!document.hidden && video.readyState >= 2) {
+        let vals = [];
+        try { vals = [...new Set((await detect(video)).map((v) => v.trim()))]; } catch {}
+        if (run !== camRun) return;
+        if (vals.length === 0) {
+          last = null; lookedAway = true;
+          setStatus('Point the camera at the barcode');
+        } else if (vals.length > 1) {
+          last = null; setStatus('Two barcodes in view. Show just one.', true);
+        } else {
+          const v = vals[0];
+          if (!lookedAway && blockNorm && norm(v) === blockNorm) {
+            last = null; setStatus('Move the camera away, then scan again.', true);
+          } else if (v === last) {
+            camRun++; onCode(v); return;
+          } else { last = v; setStatus('Hold steady…'); }
+        }
+      }
+      await sleep(110);
+    }
+  } catch (err) {
+    if (run !== camRun) return;
+    const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    setStatus(denied
+      ? 'Camera is blocked. Allow camera access for this site in Chrome, or use the scanner trigger.'
+      : 'Camera could not start. Use the scanner trigger instead.', true);
+  }
+}
+
+/* ---------- photos ---------- */
+const photoInput = $('#photoInput');
+async function prepPhoto(file) {
+  try {
+    let bmp;
+    try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch {
+      bmp = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    }
+    const w = bmp.width || bmp.naturalWidth, hh = bmp.height || bmp.naturalHeight;
+    const scale = Math.min(1, 2400 / Math.max(w, hh));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale); c.height = Math.round(hh * scale);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92));
+    return blob || file;
+  } catch { return file; }
+}
+photoInput.addEventListener('change', async () => {
+  const f = photoInput.files && photoInput.files[0];
+  photoInput.value = '';
+  if (!f) return;
+  const blob = await prepPhoto(f);
+  const old = S.photos[S.round - 1];
+  if (old) URL.revokeObjectURL(old.url);
+  S.photos[S.round - 1] = { blob, url: URL.createObjectURL(blob) };
+  go('photo');
+});
+
+/* ---------- screens ---------- */
+const main = $('#screen');
+function renderHeader() {
+  const inRound = ['photo', 'scan1', 'scan2', 'match', 'mismatch'].includes(S.screen);
+  const finished = ['checking', 'good', 'bad', 'error'].includes(S.screen);
+  const tr = $('#tracker'); tr.replaceChildren();
+  for (let i = 0; i < ROUNDS; i++) {
+    const done = i < S.serials.length;
+    const now = inRound && !done && i === S.round - 1;
+    tr.append(h('div', { class: 'seg' + (done ? ' done' : now ? ' now' : '') }));
+  }
+  $('#roundLabel').textContent = inRound ? `Round ${S.round} of ${ROUNDS}` : finished ? 'All rounds scanned' : '';
+  const ta = $('#topAction'); ta.replaceChildren();
+  if (S.screen !== 'start') ta.append(h('button', { class: 'link', onclick: startOver }, 'Start over'));
+}
+function startOver() {
+  if (S.screen === 'good' || S.screen === 'bad' || confirm('Start over? Photos and scans for this box will be cleared.')) { resetBox(); go('start'); }
+}
+
+let currentGo = 0;
+function go(name) {
+  currentGo++;
+  S.screen = name;
+  disarmWedge();
+  if ((name !== 'scan1' && name !== 'scan2') || S.mode === 'trigger') stopCamera();
+  document.body.classList.toggle('theme-ok', name === 'match' || name === 'good');
+  document.body.classList.toggle('theme-bad', name === 'mismatch' || name === 'bad');
+  renderHeader();
+  main.replaceChildren();
+  window.scrollTo(0, 0);
+  ({ start: startScreen, photo: photoScreen, scan1: () => scanScreen(1), scan2: () => scanScreen(2),
+     match: matchScreen, mismatch: mismatchScreen, checking: checkingScreen, good: goodScreen, bad: badScreen,
+     error: errorScreen }[name])();
+}
+
+function startScreen() {
+  const choose = (mode) => { S.defaultMode = mode; S.mode = mode; store.set('sc_mode', mode); go('start'); };
+  main.append(
+    h('h1', { text: 'Check a box' }),
+    h('p', { class: 'sub', text: `Photograph each serial label and scan it twice. After ${ROUNDS} rounds the app reads the photos and confirms the box is right.` }),
+    h('div', { class: 'choices', role: 'group', 'aria-label': 'How will you scan?' },
+      h('button', { class: 'choice', 'aria-pressed': String(S.defaultMode === 'trigger'), onclick: () => choose('trigger') },
+        h('b', { text: 'Handheld scanner' }), h('span', { text: 'Pull the trigger to scan' })),
+      h('button', { class: 'choice', 'aria-pressed': String(S.defaultMode === 'camera'), onclick: () => choose('camera') },
+        h('b', { text: 'Phone camera' }), h('span', { text: 'Point the camera at the barcode' }))
+    ),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => { unlockAudio(); keepAwake(); resetBox(); go('photo'); } }, 'Start box check'))
+  );
+}
+
+function photoScreen() {
+  const p = S.photos[S.round - 1];
+  main.append(
+    h('h2', { text: 'Photograph the serial label' }),
+    h('p', { class: 'sub', text: 'Fill the frame with the label so the serial is sharp and readable.' })
+  );
+  if (p) main.append(h('img', { class: 'preview', src: p.url, alt: 'Photo of the serial label' }));
+  const open = () => photoInput.click();
+  main.append(h('div', { class: 'actions' },
+    p ? h('button', { class: 'btn', onclick: () => { S.mode = S.defaultMode; S.s1 = S.s2 = null; go('scan1'); } }, 'Use this photo') : null,
+    h('button', { class: p ? 'btn alt' : 'btn', onclick: open }, p ? 'Retake photo' : 'Open camera')
+  ));
+}
+
+function scanScreen(which) {
+  const token = currentGo;
+  const trig = S.mode === 'trigger';
+  main.append(h('h2', { text: `Scan serial ${which}` }));
+  if (which === 2) main.append(h('div', { class: 'chip' }, h('div', { class: 'label', text: 'Serial 1' }), h('div', { class: 'serial', text: S.s1 })));
+  let video = null, statusEl = null;
+  if (trig) {
+    main.append(h('div', { class: 'trigger-note', text: 'Pull the scanner trigger' }));
+  } else {
+    video = h('video', { autoplay: true, playsinline: true, muted: true });
+    statusEl = h('div', { class: 'status', 'aria-live': 'polite' });
+    main.append(h('div', { class: 'cam' }, video), statusEl);
+  }
+  main.append(h('div', { class: 'actions' },
+    h('button', { class: 'btn alt', onclick: () => { S.mode = trig ? 'camera' : 'trigger'; go(which === 1 ? 'scan1' : 'scan2'); } },
+      trig ? 'Use camera instead' : 'Use scanner trigger instead')));
+
+  const onCode = (raw) => {
+    if (token !== currentGo) return;
+    feedback.scan();
+    if (which === 1) { S.s1 = raw.trim(); go('scan2'); }
+    else {
+      S.s2 = raw.trim();
+      go(norm(S.s1) === norm(S.s2) ? 'match' : 'mismatch');
+    }
+  };
+  if (trig) armWedge(onCode);
+  else startCamera(video, (t, warn) => { statusEl.textContent = t; statusEl.classList.toggle('warn', !!warn); }, onCode, which === 2 ? norm(S.s1) : null);
+}
+
+function matchScreen() {
+  S.serials[S.round - 1] = norm(S.s1);
+  renderHeader();
+  feedback.good();
+  const last = S.round === ROUNDS;
+  main.append(
+    h('h2', { text: 'Serials match' }),
+    h('div', { class: 'serial', text: norm(S.s1) }),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn light', onclick: () => { if (last) runChecks(); else { S.round++; S.s1 = S.s2 = null; S.mode = S.defaultMode; go('photo'); } } },
+        last ? 'Check the photos' : 'Next round'))
+  );
+}
+
+function mismatchScreen() {
+  feedback.bad();
+  main.append(
+    h('h2', { text: "Serials don't match" }),
+    h('div', { class: 'pair' },
+      h('div', {}, h('div', { class: 'label', text: 'Serial 1' }), h('div', { class: 'serial', text: S.s1 })),
+      h('div', {}, h('div', { class: 'label', text: 'Serial 2' }), h('div', { class: 'serial', text: S.s2 }))),
+    h('p', { class: 'sub', text: 'The photo is kept. Scan both serials again.' }),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn light', onclick: () => { S.s1 = S.s2 = null; go('scan1'); } }, 'Try again'))
+  );
+}
+
+/* ---------- photo check (OCR) ---------- */
+const TESS_FOUND = (text, serial) => !!serial && norm(text).includes(serial);
+function candidates(texts) {
+  const out = new Set();
+  for (const t of texts) {
+    const spaced = String(t).toUpperCase().split(/\s+/).map((w) => norm(w)).join(' ');
+    (spaced.match(/\b[A-Z]{1,3}\d{5,}\b/g) || []).forEach((m) => out.add(m));
+  }
+  if (out.size) return [...out].slice(0, 4).join('   ');
+  const raw = texts.join(' ').replace(/\s+/g, ' ').trim();
+  return raw ? raw.slice(0, 80) : 'no text found';
+}
+async function enhance(blob) {
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.max(1, Math.min(2, 2200 / Math.max(bmp.width, bmp.height)));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 4) { const g = (d[i] * 299 + d[i+1] * 587 + d[i+2] * 114) / 1000 | 0; d[i] = g; hist[g]++; }
+  const total = d.length / 4; let acc = 0, lo = 0, hi = 255;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total * 0.01) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= total * 0.01) { hi = v; break; } }
+  const range = Math.max(1, hi - lo);
+  for (let i = 0; i < d.length; i += 4) {
+    const v = Math.max(0, Math.min(255, ((d[i] - lo) * 255) / range));
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+let barEl = null, labelEl = null;
+function checkingScreen() {
+  barEl = h('i'); labelEl = h('p', { class: 'sub', text: 'Loading the photo reader…', 'aria-live': 'polite' });
+  main.append(h('h2', { text: 'Checking photos' }), labelEl, h('div', { class: 'bar' }, barEl),
+    h('p', { class: 'sub', text: 'Keep this screen open. This takes a few seconds per photo.' }));
+}
+function setProgress(frac, text) { if (barEl) barEl.style.width = Math.round(frac * 100) + '%'; if (text && labelEl) labelEl.textContent = text; }
+
+let lastResults = null;
+async function runChecks() {
+  go('checking');
+  const token = currentGo;
+  let worker = null;
+  try {
+    await loadScript('tesseract.min.js');
+    let idx = 0;
+    worker = await Tesseract.createWorker('eng', 1, {
+      workerPath: abs('worker.min.js'),
+      corePath: abs('./'),
+      langPath: abs('./'),
+      workerBlobURL: false, gzip: true, cacheMethod: 'none',
+      logger: (m) => { if (m.status === 'recognizing text') setProgress((idx + m.progress) / ROUNDS); }
+    });
+    const results = [];
+    for (idx = 0; idx < ROUNDS; idx++) {
+      if (token !== currentGo) { await worker.terminate(); return; }
+      setProgress(idx / ROUNDS, `Reading photo ${idx + 1} of ${ROUNDS}`);
+      const serial = S.serials[idx], blob = S.photos[idx].blob, texts = [];
+      await worker.setParameters({ tessedit_pageseg_mode: '3' });
+      texts.push((await worker.recognize(blob)).data.text || '');
+      let ok = TESS_FOUND(texts[0], serial);
+      if (!ok) {   // second try: sharper contrast, sparse-text layout
+        setProgress(idx / ROUNDS, `Reading photo ${idx + 1} of ${ROUNDS} again`);
+        await worker.setParameters({ tessedit_pageseg_mode: '11' });
+        texts.push((await worker.recognize(await enhance(blob))).data.text || '');
+        ok = TESS_FOUND(texts[1], serial);
+      }
+      results.push({ ok, texts });
+    }
+    await worker.terminate(); worker = null;
+    lastResults = results;
+    setProgress(1);
+    go(results.every((r) => r.ok) ? 'good' : 'bad');
+  } catch (err) {
+    try { worker && await worker.terminate(); } catch {}
+    lastResults = { message: String((err && err.message) || err) };
+    go('error');
+  }
+}
+
+function goodScreen() {
+  feedback.good();
+  main.append(
+    h('h2', { text: 'Box is good' }),
+    h('p', { class: 'sub', text: `All ${ROUNDS} photos contain the serial that was scanned.` }),
+    h('ul', { class: 'rounds' }, S.serials.map((s, i) => h('li', {}, h('span', { text: `Round ${i + 1}` }), h('span', { class: 'serial', text: s })))),
+    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
+  );
+}
+
+function badScreen() {
+  feedback.bad();
+  const failed = lastResults.map((r, i) => ({ r, i })).filter((x) => !x.r.ok);
+  main.append(
+    h('h2', { text: 'Box is bad' }),
+    h('p', { class: 'sub', text: failed.length === 1 ? 'One photo does not show the scanned serial.' : `${failed.length} photos do not show the scanned serial.` }),
+    ...failed.map(({ r, i }) => h('div', { class: 'fail' },
+      h('h3', { text: `Round ${i + 1}` }),
+      h('div', { class: 'label', text: 'Scanned' }), h('div', { class: 'serial', text: S.serials[i] }),
+      h('div', { class: 'label', text: 'Photo reads' }), h('div', { class: 'serial', text: candidates(r.texts) }),
+      h('img', { src: S.photos[i].url, alt: `Photo for round ${i + 1}` })
+    )),
+    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
+  );
+}
+
+function errorScreen() {
+  main.append(
+    h('h2', { text: "Couldn't read the photos" }),
+    h('div', { class: 'err', text: lastResults && lastResults.message ? lastResults.message : 'Something went wrong while reading the photos.' }),
+    h('p', { class: 'sub', text: 'Your scans and photos are still here. Try again.' }),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: runChecks }, 'Try again'))
+  );
+}
+
+/* ---------- boot ---------- */
+S.mode = S.defaultMode;
+go('start');
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+})();
+</script>
+</body>
+</html>
