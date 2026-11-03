@@ -251,7 +251,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
 /* ---------- state ---------- */
 const S = {
   screen: 'start',
-  defaultMode: store.get('sc_mode') === 'camera' ? 'camera' : 'trigger',
+  defaultMode: 'trigger',
+  modeChosen: false,   // asked each time the page loads, then not again until it is reloaded
+  pickedMode: null,
   mode: 'trigger',
   round: 1,
   photos: [],     // { blob, url } per round
@@ -477,7 +479,7 @@ function renderHeader() {
   if (S.screen !== 'start') ta.append(h('button', { class: 'link', onclick: startOver }, 'Start over'));
 }
 function startOver() {
-  if (S.screen === 'good' || S.screen === 'bad' || confirm('Start over? Photos and scans for this box will be cleared.')) { resetBox(); go('start'); }
+  if (S.screen === 'good' || S.screen === 'bad' || confirm('Start over? Photos and scans for this box will be cleared.')) newBox();
 }
 
 let currentGo = 0;
@@ -497,19 +499,29 @@ function go(name) {
      error: errorScreen }[name])();
 }
 
+function newBox() { unlockAudio(); keepAwake(); resetBox(); go('photo'); }
+
 function startScreen() {
-  const choose = (mode) => { S.defaultMode = mode; S.mode = mode; store.set('sc_mode', mode); go('start'); };
+  const chooseMode = (mode) => { S.defaultMode = mode; S.mode = mode; S.pickedMode = mode; S.modeChosen = true; go('start'); };
+  if (!S.modeChosen) {   // first screen after the page loads (or after tapping Change)
+    main.append(
+      h('h1', { text: 'How will you scan?' }),
+      h('p', { class: 'sub', text: 'Pick one to begin. It stays selected for every box until you close or reload the app.' }),
+      h('div', { class: 'choices', role: 'group', 'aria-label': 'How will you scan?' },
+        h('button', { class: 'choice', 'aria-pressed': String(S.pickedMode === 'trigger'), onclick: () => chooseMode('trigger') },
+          h('b', { text: 'Handheld scanner' }), h('span', { text: 'Pull the trigger to scan' })),
+        h('button', { class: 'choice', 'aria-pressed': String(S.pickedMode === 'camera'), onclick: () => chooseMode('camera') },
+          h('b', { text: 'Phone camera' }), h('span', { text: 'Point the camera at the barcode' }))
+      )
+    );
+    return;
+  }
   main.append(
     h('h1', { text: 'Check a box' }),
     h('p', { class: 'sub', text: ONE ? 'Photograph the serial label and scan it twice. The app then reads the photo and confirms it matches.' : `Photograph each serial label and scan it twice. After ${ROUNDS} rounds the app reads the photos and confirms the box is right.` }),
-    h('div', { class: 'choices', role: 'group', 'aria-label': 'How will you scan?' },
-      h('button', { class: 'choice', 'aria-pressed': String(S.defaultMode === 'trigger'), onclick: () => choose('trigger') },
-        h('b', { text: 'Handheld scanner' }), h('span', { text: 'Pull the trigger to scan' })),
-      h('button', { class: 'choice', 'aria-pressed': String(S.defaultMode === 'camera'), onclick: () => choose('camera') },
-        h('b', { text: 'Phone camera' }), h('span', { text: 'Point the camera at the barcode' }))
-    ),
-    h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => { unlockAudio(); keepAwake(); resetBox(); go('photo'); } }, 'Start box check'))
+    h('p', { class: 'sub' }, 'Scanner: ', h('b', { text: S.defaultMode === 'camera' ? 'Phone camera' : 'Handheld scanner' }), ' ',
+      h('button', { class: 'link', onclick: () => { S.modeChosen = false; go('start'); } }, 'Change')),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: newBox }, 'Start box check'))
   );
 }
 
@@ -808,7 +820,7 @@ function goodScreen() {
     h('h2', { text: 'Box is good' }),
     h('p', { class: 'sub', text: ONE ? 'The photo shows the serial that was scanned.' : `All ${ROUNDS} photos contain the serial that was scanned.` }),
     h('ul', { class: 'rounds' }, S.serials.map((s, i) => h('li', {}, ONE ? null : h('span', { text: `Round ${i + 1}` }), h('span', { class: 'serial', text: s })))),
-    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
+    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: newBox }, 'Check another box'))
   );
 }
 
@@ -825,7 +837,7 @@ function badScreen() {
       h('img', { src: S.photos[i].url, alt: ONE ? 'Photo of the serial' : `Photo for round ${i + 1}` }),
       h('button', { class: 'btn light retake', onclick: () => { S.retakeIdx = i; photoInput.click(); } }, 'Retake photo')
     )),
-    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
+    h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: newBox }, 'Check another box'))
   );
 }
 
