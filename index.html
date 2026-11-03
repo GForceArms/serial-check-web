@@ -28,6 +28,7 @@
 body.theme-ok  { --bg: var(--go);   --fg: #fff; --seg-off: rgba(255,255,255,.35); --seg-now: #fff; --seg-done: #fff; }
 body.theme-bad { --bg: var(--stop); --fg: #fff; --seg-off: rgba(255,255,255,.35); --seg-now: #fff; --seg-done: #fff; }
 
+[hidden] { display: none !important; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
@@ -137,6 +138,7 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 
 /* final */
 .rounds { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.rounds li:only-child { border-top: 0; padding-top: 0; }
 .rounds li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
   border-top: 1px solid rgba(255,255,255,.45); padding-top: 8px; }
 .rounds .serial { font-size: clamp(20px, 6vw, 28px); }
@@ -145,6 +147,7 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 .fail .label { font-size: 15px; opacity: .9; margin-top: 6px; }
 .fail .serial { font-size: clamp(18px, 5.6vw, 26px); }
 .fail img { width: 100%; max-height: 180px; object-fit: contain; border-radius: 8px; background: rgba(0,0,0,.35); margin-top: 8px; }
+.fail .retake { margin-top: 10px; min-height: 52px; font-size: 18px; }
 .err { background: #fff; color: var(--ink); border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
 
 @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .btn:active { transform: none; } }
@@ -167,7 +170,8 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 (() => {
 'use strict';
 
-const ROUNDS = 5;
+const ROUNDS = 1;   // serials checked per box. Change this number to check more (e.g. 5).
+const ONE = ROUNDS === 1;
 const $ = (s) => document.querySelector(s);
 
 /* ---------- helpers ---------- */
@@ -237,11 +241,13 @@ const S = {
   round: 1,
   photos: [],     // { blob, url } per round
   serials: [],    // accepted serial (normalized) per round
-  s1: null, s2: null
+  s1: null, s2: null,
+  retakeIdx: null   // failed round whose photo is being retaken on the result screen
 };
 function resetBox() {
   S.photos.forEach((p) => p && URL.revokeObjectURL(p.url));
-  Object.assign(S, { round: 1, photos: [], serials: [], s1: null, s2: null, mode: S.defaultMode });
+  Object.assign(S, { round: 1, photos: [], serials: [], s1: null, s2: null, retakeIdx: null, mode: S.defaultMode });
+  lastResults = null; lastOnly = null;
 }
 
 /* ---------- hardware scanner (keyboard mode) ---------- */
@@ -370,6 +376,13 @@ photoInput.addEventListener('change', async () => {
   photoInput.value = '';
   if (!f) return;
   const blob = await prepPhoto(f);
+  if (S.retakeIdx != null) {            // retaking a failed photo on the result screen
+    const i = S.retakeIdx; S.retakeIdx = null;
+    if (S.photos[i]) URL.revokeObjectURL(S.photos[i].url);
+    S.photos[i] = { blob, url: URL.createObjectURL(blob) };
+    runChecks([i]);
+    return;
+  }
   const old = S.photos[S.round - 1];
   if (old) URL.revokeObjectURL(old.url);
   S.photos[S.round - 1] = { blob, url: URL.createObjectURL(blob) };
@@ -387,7 +400,8 @@ function renderHeader() {
     const now = inRound && !done && i === S.round - 1;
     tr.append(h('div', { class: 'seg' + (done ? ' done' : now ? ' now' : '') }));
   }
-  $('#roundLabel').textContent = inRound ? `Round ${S.round} of ${ROUNDS}` : finished ? 'All rounds scanned' : '';
+  $('#roundLabel').textContent = ONE ? '' : inRound ? `Round ${S.round} of ${ROUNDS}` : finished ? 'All rounds scanned' : '';
+  tr.hidden = ONE; $('#roundLabel').hidden = ONE;
   const ta = $('#topAction'); ta.replaceChildren();
   if (S.screen !== 'start') ta.append(h('button', { class: 'link', onclick: startOver }, 'Start over'));
 }
@@ -399,6 +413,7 @@ let currentGo = 0;
 function go(name) {
   currentGo++;
   S.screen = name;
+  if (name !== 'bad') S.retakeIdx = null;
   disarmWedge();
   if ((name !== 'scan1' && name !== 'scan2') || S.mode === 'trigger') stopCamera();
   document.body.classList.toggle('theme-ok', name === 'match' || name === 'good');
@@ -415,7 +430,7 @@ function startScreen() {
   const choose = (mode) => { S.defaultMode = mode; S.mode = mode; store.set('sc_mode', mode); go('start'); };
   main.append(
     h('h1', { text: 'Check a box' }),
-    h('p', { class: 'sub', text: `Photograph each serial label and scan it twice. After ${ROUNDS} rounds the app reads the photos and confirms the box is right.` }),
+    h('p', { class: 'sub', text: ONE ? 'Photograph the serial label and scan it twice. The app then reads the photo and confirms it matches.' : `Photograph each serial label and scan it twice. After ${ROUNDS} rounds the app reads the photos and confirms the box is right.` }),
     h('div', { class: 'choices', role: 'group', 'aria-label': 'How will you scan?' },
       h('button', { class: 'choice', 'aria-pressed': String(S.defaultMode === 'trigger'), onclick: () => choose('trigger') },
         h('b', { text: 'Handheld scanner' }), h('span', { text: 'Pull the trigger to scan' })),
@@ -431,7 +446,7 @@ function photoScreen() {
   const p = S.photos[S.round - 1];
   main.append(
     h('h2', { text: 'Photograph the serial label' }),
-    h('p', { class: 'sub', text: 'Fill the frame with the label so the serial is sharp and readable.' })
+    h('p', { class: 'sub', text: 'Get close: the serial should fill about a third of the photo width. Hold steady and avoid glare.' })
   );
   if (p) main.append(h('img', { class: 'preview', src: p.url, alt: 'Photo of the serial label' }));
   const open = () => photoInput.click();
@@ -481,7 +496,7 @@ function matchScreen() {
     h('div', { class: 'serial', text: norm(S.s1) }),
     h('div', { class: 'actions' },
       h('button', { class: 'btn light', onclick: () => { if (last) runChecks(); else { S.round++; S.s1 = S.s2 = null; S.mode = S.defaultMode; go('photo'); } } },
-        last ? 'Check the photos' : 'Next round'))
+        last ? (ONE ? 'Check the photo' : 'Check the photos') : 'Next round'))
   );
 }
 
@@ -507,75 +522,206 @@ function candidates(texts) {
     (spaced.match(/\b[A-Z]{1,3}\d{5,}\b/g) || []).forEach((m) => out.add(m));
   }
   if (out.size) return [...out].slice(0, 4).join('   ');
-  const raw = texts.join(' ').replace(/\s+/g, ' ').trim();
-  return raw ? raw.slice(0, 80) : 'no text found';
+  return 'no serial found';
 }
-async function enhance(blob) {
-  const bmp = await createImageBitmap(blob);
-  const scale = Math.max(1, Math.min(2, 2200 / Math.max(bmp.width, bmp.height)));
-  const c = document.createElement('canvas');
-  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(bmp, 0, 0, c.width, c.height);
-  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < d.length; i += 4) { const g = (d[i] * 299 + d[i+1] * 587 + d[i+2] * 114) / 1000 | 0; d[i] = g; hist[g]++; }
-  const total = d.length / 4; let acc = 0, lo = 0, hi = 255;
-  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total * 0.01) { lo = v; break; } }
-  acc = 0;
-  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= total * 0.01) { hi = v; break; } }
-  const range = Math.max(1, hi - lo);
-  for (let i = 0; i < d.length; i += 4) {
-    const v = Math.max(0, Math.min(255, ((d[i] - lo) * 255) / range));
-    d[i] = d[i+1] = d[i+2] = v;
+/* HP-BEGIN: pure image helpers (also unit-tested outside the browser) */
+function toGray(rgba, n) {
+  const g = new Uint8ClampedArray(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) g[i] = (rgba[j] * 299 + rgba[j + 1] * 587 + rgba[j + 2] * 114) / 1000;
+  return g;
+}
+function boxBlurH(src, dst, w, h, r) {
+  const div = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    const o = y * w; let sum = 0;
+    for (let k = -r; k <= r; k++) sum += src[o + Math.min(w - 1, Math.max(0, k))];
+    for (let x = 0; x < w; x++) {
+      dst[o + x] = sum / div;
+      sum += src[o + Math.min(w - 1, x + r + 1)] - src[o + Math.max(0, x - r)];
+    }
   }
+}
+function boxBlurV(src, dst, w, h, r) {
+  const div = 2 * r + 1;
+  for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let k = -r; k <= r; k++) sum += src[Math.min(h - 1, Math.max(0, k)) * w + x];
+    for (let y = 0; y < h; y++) {
+      dst[y * w + x] = sum / div;
+      sum += src[Math.min(h - 1, y + r + 1) * w + x] - src[Math.max(0, y - r) * w + x];
+    }
+  }
+}
+// Removes the uneven background so small, low-contrast stamped or printed text stands out.
+function highPass(gray, w, h) {
+  const n = w * h;
+  let a = Float32Array.from(gray), b = new Float32Array(n);
+  const r = Math.max(2, Math.round(Math.max(w, h) * 0.012));
+  for (let i = 0; i < 3; i++) { boxBlurH(a, b, w, h, r); boxBlurV(b, a, w, h, r); }
+  const d = new Float32Array(n), hist = new Uint32Array(512);
+  for (let i = 0; i < n; i++) {
+    const v = gray[i] - a[i]; d[i] = v;
+    hist[Math.min(511, Math.max(0, Math.round(v) + 256))]++;
+  }
+  let acc = 0, lo = -255, hi = 255;
+  for (let k = 0; k < 512; k++) { acc += hist[k]; if (acc >= n * 0.01) { lo = k - 256; break; } }
+  acc = 0;
+  for (let k = 511; k >= 0; k--) { acc += hist[k]; if (acc >= n * 0.01) { hi = k - 256; break; } }
+  const span = Math.max(1, hi - lo), out = new Uint8ClampedArray(n);
+  for (let i = 0; i < n; i++) out[i] = ((d[i] - lo) / span) * 255;
+  return out;
+}
+// Four overlapping zoomed-in pieces of the photo.
+function tileRects(W, H) {
+  const tw = Math.round(W * 0.65), th = Math.round(H * 0.55), out = [];
+  for (const y of [0, H - th]) for (const x of [0, W - tw]) out.push({ x, y, w: tw, h: th });
+  return out;
+}
+// Finds label- or plate-shaped regions that are lighter (or darker) than their surroundings,
+// e.g. a small stamped plate on a dark part. Returns rectangles in full-photo pixels, best first.
+function findPlates(gray, w, h) {
+  const W = w >> 1, H = h >> 1, g = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = 2 * y * w + 2 * x;
+    g[y * W + x] = (gray[i] + gray[i + 1] + gray[i + w] + gray[i + w + 1]) / 4;
+  }
+  let a = Float32Array.from(g), b = new Float32Array(W * H);
+  const r = Math.max(4, Math.round(Math.max(W, H) * 0.05));
+  for (let i = 0; i < 3; i++) { boxBlurH(a, b, W, H, r); boxBlurV(b, a, W, H, r); }
+  const lab = new Int32Array(W * H), stack = new Int32Array(W * H), found = [];
+  for (const pol of [1, -1]) for (const T of [20, 35]) {
+    lab.fill(0);
+    const mask = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) { const d = g[i] - a[i]; mask[i] = pol > 0 ? d > T : d < -T; }
+    let id = 0;
+    for (let s0 = 0; s0 < W * H; s0++) {
+      if (!mask[s0] || lab[s0]) continue;
+      id++; let sp = 0; stack[sp++] = s0; lab[s0] = id;
+      let x0 = W, y0 = H, x1 = 0, y1 = 0, area = 0;
+      while (sp) {
+        const q = stack[--sp], x = q % W, y = (q / W) | 0;
+        area++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (x > 0 && mask[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack[sp++] = q - 1; }
+        if (x < W - 1 && mask[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack[sp++] = q + 1; }
+        if (y > 0 && mask[q - W] && !lab[q - W]) { lab[q - W] = id; stack[sp++] = q - W; }
+        if (y < H - 1 && mask[q + W] && !lab[q + W]) { lab[q + W] = id; stack[sp++] = q + W; }
+      }
+      const cw = x1 - x0 + 1, ch = y1 - y0 + 1, fill = area / (cw * ch), asp = cw / ch;
+      if (cw >= 0.04 * W && cw <= 0.6 * W && ch >= 0.012 * H && ch <= 0.15 * H && asp >= 1.5 && asp <= 14 && fill >= 0.4)
+        found.push({ x: x0 * 2, y: y0 * 2, w: cw * 2, h: ch * 2, fill, invert: pol < 0 });
+    }
+  }
+  found.sort((p, q) => q.fill - p.fill);
+  const iou = (p, q) => {
+    const ix = Math.max(0, Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x));
+    const iy = Math.max(0, Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y));
+    return (ix * iy) / (p.w * p.h + q.w * q.h - ix * iy);
+  };
+  const out = [];
+  for (const c of found) if (!out.some((o) => iou(o, c) > 0.5)) out.push(c);
+  return out.slice(0, 6);
+}
+function insetRect(r) {   // trim the plate's dark edge so only the plate face is read
+  const m = Math.max(2, Math.round(r.h * 0.045));
+  return { x: r.x + m, y: r.y + m, w: Math.max(8, r.w - 2 * m), h: Math.max(8, r.h - 2 * m) };
+}
+function cropGray(gray, W, r, invert) {
+  const o = new Uint8ClampedArray(r.w * r.h);
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    const v = gray[(r.y + y) * W + r.x + x];
+    o[y * r.w + x] = invert ? 255 - v : v;
+  }
+  return o;
+}
+/* HP-END */
+
+function canvasFromGray(gray, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d'), img = ctx.createImageData(w, h), d = img.data;
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) { d[j] = d[j + 1] = d[j + 2] = gray[i]; d[j + 3] = 255; }
   ctx.putImageData(img, 0, 0);
   return c;
+}
+function cropCanvas(src, r) {
+  const c = document.createElement('canvas'); c.width = r.w; c.height = r.h;
+  c.getContext('2d').drawImage(src, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  return c;
+}
+/* Reads one photo. Small stamped serials on dark, textured parts defeat a single pass over the
+   whole photo, so: (1) find the label/plate and read it up close, (2) background removed,
+   (3) photo as taken, (4) zoomed pieces. Stops as soon as the scanned serial is found. */
+async function readPhoto(worker, blob, serial, status) {
+  const texts = [];
+  const attempt = async (img, psm) => {
+    await worker.setParameters({ tessedit_pageseg_mode: psm });
+    const t = (await worker.recognize(img)).data.text || '';
+    texts.push(t);
+    return TESS_FOUND(t, serial);
+  };
+  const bmp = await createImageBitmap(blob);
+  const full = document.createElement('canvas');
+  full.width = bmp.width; full.height = bmp.height;
+  const ctx = full.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  if (bmp.close) bmp.close();
+  const W = full.width, H = full.height;
+  const gray = toGray(ctx.getImageData(0, 0, W, H).data, W * H);
+  // 1) find label/plate-shaped regions and read each one up close
+  status(' (finding the label)');
+  const plates = findPlates(gray, W, H);
+  for (const pass of [0, 1]) for (const p of plates) {
+    const r = pass === 0 ? insetRect(p) : p;
+    if (await attempt(canvasFromGray(cropGray(gray, W, r, p.invert), r.w, r.h), pass === 0 ? '6' : '7')) return { ok: true, texts };
+  }
+  // 2) whole photo with the background evened out
+  status('');
+  const hp = canvasFromGray(highPass(gray, W, H), W, H);
+  if (await attempt(hp, '11')) return { ok: true, texts };
+  status(' (second look)');
+  if (await attempt(blob, '3')) return { ok: true, texts };
+  status(' (zooming in)');
+  for (const r of tileRects(W, H)) if (await attempt(cropCanvas(hp, r), '6')) return { ok: true, texts };
+  return { ok: false, texts };
 }
 
 let barEl = null, labelEl = null;
 function checkingScreen() {
   barEl = h('i'); labelEl = h('p', { class: 'sub', text: 'Loading the photo reader…', 'aria-live': 'polite' });
-  main.append(h('h2', { text: 'Checking photos' }), labelEl, h('div', { class: 'bar' }, barEl),
-    h('p', { class: 'sub', text: 'Keep this screen open. This takes a few seconds per photo.' }));
+  main.append(h('h2', { text: ONE ? 'Checking photo' : 'Checking photos' }), labelEl, h('div', { class: 'bar' }, barEl),
+    h('p', { class: 'sub', text: ONE ? 'Keep this screen open. This takes a few seconds.' : 'Keep this screen open. This takes a few seconds per photo.' }));
 }
 function setProgress(frac, text) { if (barEl) barEl.style.width = Math.round(frac * 100) + '%'; if (text && labelEl) labelEl.textContent = text; }
 
-let lastResults = null;
-async function runChecks() {
+let lastResults = null, lastOnly = null;
+async function runChecks(only) {
+  lastOnly = only || null;
+  const list = only || Array.from({ length: ROUNDS }, (_, i) => i);
+  const prior = Array.isArray(lastResults) ? lastResults.slice() : [];
   go('checking');
   const token = currentGo;
   let worker = null;
   try {
     await loadScript('tesseract.min.js');
-    let idx = 0;
+    let k = 0;
     worker = await Tesseract.createWorker('eng', 1, {
       workerPath: abs('worker.min.js'),
       corePath: abs('./'),
       langPath: abs('./'),
       workerBlobURL: false, gzip: true, cacheMethod: 'none',
-      logger: (m) => { if (m.status === 'recognizing text') setProgress((idx + m.progress) / ROUNDS); }
+      logger: (m) => { if (m.status === 'recognizing text') setProgress((k + m.progress) / list.length); }
     });
-    const results = [];
-    for (idx = 0; idx < ROUNDS; idx++) {
+    const results = prior;
+    for (k = 0; k < list.length; k++) {
       if (token !== currentGo) { await worker.terminate(); return; }
-      setProgress(idx / ROUNDS, `Reading photo ${idx + 1} of ${ROUNDS}`);
-      const serial = S.serials[idx], blob = S.photos[idx].blob, texts = [];
-      await worker.setParameters({ tessedit_pageseg_mode: '3' });
-      texts.push((await worker.recognize(blob)).data.text || '');
-      let ok = TESS_FOUND(texts[0], serial);
-      if (!ok) {   // second try: sharper contrast, sparse-text layout
-        setProgress(idx / ROUNDS, `Reading photo ${idx + 1} of ${ROUNDS} again`);
-        await worker.setParameters({ tessedit_pageseg_mode: '11' });
-        texts.push((await worker.recognize(await enhance(blob))).data.text || '');
-        ok = TESS_FOUND(texts[1], serial);
-      }
-      results.push({ ok, texts });
+      const idx = list[k];
+      setProgress(k / list.length, ONE ? 'Reading the photo' : `Reading photo ${idx + 1} of ${ROUNDS}`);
+      results[idx] = await readPhoto(worker, S.photos[idx].blob, S.serials[idx],
+        (t) => setProgress(k / list.length, (ONE ? 'Reading the photo' : `Reading photo ${idx + 1} of ${ROUNDS}`) + t));
     }
     await worker.terminate(); worker = null;
     lastResults = results;
     setProgress(1);
-    go(results.every((r) => r.ok) ? 'good' : 'bad');
+    go(results.every((r) => r && r.ok) ? 'good' : 'bad');
   } catch (err) {
     try { worker && await worker.terminate(); } catch {}
     lastResults = { message: String((err && err.message) || err) };
@@ -587,23 +733,24 @@ function goodScreen() {
   feedback.good();
   main.append(
     h('h2', { text: 'Box is good' }),
-    h('p', { class: 'sub', text: `All ${ROUNDS} photos contain the serial that was scanned.` }),
-    h('ul', { class: 'rounds' }, S.serials.map((s, i) => h('li', {}, h('span', { text: `Round ${i + 1}` }), h('span', { class: 'serial', text: s })))),
+    h('p', { class: 'sub', text: ONE ? 'The photo shows the serial that was scanned.' : `All ${ROUNDS} photos contain the serial that was scanned.` }),
+    h('ul', { class: 'rounds' }, S.serials.map((s, i) => h('li', {}, ONE ? null : h('span', { text: `Round ${i + 1}` }), h('span', { class: 'serial', text: s })))),
     h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
   );
 }
 
 function badScreen() {
   feedback.bad();
-  const failed = lastResults.map((r, i) => ({ r, i })).filter((x) => !x.r.ok);
+  const failed = lastResults.map((r, i) => ({ r, i })).filter((x) => x.r && !x.r.ok);
   main.append(
     h('h2', { text: 'Box is bad' }),
-    h('p', { class: 'sub', text: failed.length === 1 ? 'One photo does not show the scanned serial.' : `${failed.length} photos do not show the scanned serial.` }),
+    h('p', { class: 'sub', text: (ONE ? 'The photo does not show the scanned serial.' : failed.length === 1 ? 'One photo does not show the scanned serial.' : `${failed.length} photos do not show the scanned serial.`) + ' If the serial is really in the photo, retake it closer and check again.' }),
     ...failed.map(({ r, i }) => h('div', { class: 'fail' },
-      h('h3', { text: `Round ${i + 1}` }),
+      ONE ? null : h('h3', { text: `Round ${i + 1}` }),
       h('div', { class: 'label', text: 'Scanned' }), h('div', { class: 'serial', text: S.serials[i] }),
       h('div', { class: 'label', text: 'Photo reads' }), h('div', { class: 'serial', text: candidates(r.texts) }),
-      h('img', { src: S.photos[i].url, alt: `Photo for round ${i + 1}` })
+      h('img', { src: S.photos[i].url, alt: ONE ? 'Photo of the serial' : `Photo for round ${i + 1}` }),
+      h('button', { class: 'btn light retake', onclick: () => { S.retakeIdx = i; photoInput.click(); } }, 'Retake photo')
     )),
     h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: () => { resetBox(); go('start'); } }, 'Check another box'))
   );
@@ -611,10 +758,10 @@ function badScreen() {
 
 function errorScreen() {
   main.append(
-    h('h2', { text: "Couldn't read the photos" }),
-    h('div', { class: 'err', text: lastResults && lastResults.message ? lastResults.message : 'Something went wrong while reading the photos.' }),
-    h('p', { class: 'sub', text: 'Your scans and photos are still here. Try again.' }),
-    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: runChecks }, 'Try again'))
+    h('h2', { text: ONE ? "Couldn't read the photo" : "Couldn't read the photos" }),
+    h('div', { class: 'err', text: lastResults && lastResults.message ? lastResults.message : 'Something went wrong while reading the photo.' }),
+    h('p', { class: 'sub', text: ONE ? 'Your scans and photo are still here. Try again.' : 'Your scans and photos are still here. Try again.' }),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => runChecks(lastOnly) }, 'Try again'))
   );
 }
 
