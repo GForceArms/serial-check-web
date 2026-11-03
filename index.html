@@ -100,7 +100,7 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 .btn:active { transform: translateY(1px); }
 .btn.alt { background: transparent; color: inherit; border: 2px solid currentColor; min-height: 56px; font-size: 18px; }
 .btn.light { background: #fff; color: var(--ink); }
-:is(.btn, .link, .choice, .wedge-field):focus-visible { outline: 4px solid #FFC300; outline-offset: 3px; }
+:is(.btn, .link, .choice, .wedge-field, .text-field):focus-visible { outline: 4px solid #FFC300; outline-offset: 3px; }
 
 /* start screen scanner choice */
 .choices { display: grid; gap: 10px; margin: 18px 0 8px; }
@@ -159,6 +159,10 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 }
 .wedge-field:focus { border-style: solid; }
 .sub.small { font-size: 15px; margin-bottom: 6px; }
+.text-field { width: 100%; font: 800 40px var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 12px 16px; margin: 10px 0 6px;
+  background: #fff; color: var(--ink); border: 3px solid var(--ink); border-radius: 10px; }
+.savebox { margin-top: 12px; }
+.savebox .sub { margin-bottom: 8px; }
 .dock { margin-top: 12px; padding-top: 10px; border-top: 3px solid var(--ink); }
 .dock-label { display: block; font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 .dbg { margin: 2px 0 10px; font-size: 15px; }
@@ -187,6 +191,10 @@ body.theme-ok .sub, body.theme-bad .sub { color: rgba(255,255,255,.88); }
 
 const ROUNDS = 1;   // serials checked per box. Change this number to check more (e.g. 5).
 const ONE = ROUNDS === 1;
+// Finished checks are saved to NetSuite through a Suitelet. Paste its External URL below.
+// Leave LOG_URL empty to turn saving off (the app still asks for initials).
+const LOG_URL = '';
+const LOG_KEY = 'a8d6fd388a4883c42e55778c';
 const $ = (s) => document.querySelector(s);
 
 /* ---------- helpers ---------- */
@@ -254,6 +262,8 @@ const S = {
   defaultMode: 'trigger',
   modeChosen: false,   // asked each time the page loads, then not again until it is reloaded
   pickedMode: null,
+  initials: '',        // typed once per page load, saved with every good check
+  prevInitials: '',
   mode: 'trigger',
   round: 1,
   photos: [],     // { blob, url } per round
@@ -499,7 +509,13 @@ function go(name) {
      error: errorScreen }[name])();
 }
 
-function newBox() { unlockAudio(); keepAwake(); resetBox(); go('photo'); }
+let saveOutstanding = false;   // a good check that has not been saved yet
+window.addEventListener('beforeunload', (e) => { if (saveOutstanding) { e.preventDefault(); e.returnValue = ''; } });
+function newBox() {
+  if (saveOutstanding && !confirm('This check has not been saved yet. Continue anyway?')) return;
+  saveOutstanding = false;
+  unlockAudio(); keepAwake(); resetBox(); go('photo');
+}
 
 function startScreen() {
   const chooseMode = (mode) => { S.defaultMode = mode; S.mode = mode; S.pickedMode = mode; S.modeChosen = true; go('start'); };
@@ -516,13 +532,37 @@ function startScreen() {
     );
     return;
   }
+  if (!S.initials) { initialsScreen(); return; }
   main.append(
     h('h1', { text: 'Check a box' }),
     h('p', { class: 'sub', text: ONE ? 'Photograph the serial label and scan it twice. The app then reads the photo and confirms it matches.' : `Photograph each serial label and scan it twice. After ${ROUNDS} rounds the app reads the photos and confirms the box is right.` }),
     h('p', { class: 'sub' }, 'Scanner: ', h('b', { text: S.defaultMode === 'camera' ? 'Phone camera' : 'Handheld scanner' }), ' ',
       h('button', { class: 'link', onclick: () => { S.modeChosen = false; go('start'); } }, 'Change')),
+    h('p', { class: 'sub' }, 'Initials: ', h('b', { text: S.initials }), ' ',
+      h('button', { class: 'link', onclick: () => { S.prevInitials = S.initials; S.initials = ''; go('start'); } }, 'Change')),
     h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: newBox }, 'Start box check'))
   );
+}
+
+function initialsScreen() {
+  const input = h('input', { id: 'initials', class: 'text-field', type: 'text', maxlength: '4', inputmode: 'text', autocomplete: 'off',
+    autocapitalize: 'characters', autocorrect: 'off', spellcheck: 'false', placeholder: 'AB', 'aria-label': 'Your initials', value: S.prevInitials || '' });
+  const err = h('div', { class: 'status warn', 'aria-live': 'polite' });
+  const clean = () => input.value.toUpperCase().replace(/[^A-Z]/g, '');
+  const submit = () => {
+    const v = clean();
+    if (v.length < 2) { err.textContent = 'Enter your initials (2 to 4 letters).'; input.focus(); return; }
+    S.initials = v; S.prevInitials = v; go('start');
+  };
+  input.addEventListener('input', () => { const v = clean(); if (input.value !== v) input.value = v; err.textContent = ''; });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  main.append(
+    h('h1', { text: 'Your initials' }),
+    h('p', { class: 'sub', text: 'They are saved with each serial you check.' }),
+    input, err,
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: submit }, 'Continue'))
+  );
+  setTimeout(() => { try { input.focus(); } catch {} }, 60);
 }
 
 function photoScreen() {
@@ -814,14 +854,48 @@ async function runChecks(only) {
   }
 }
 
+async function sendLog() {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const res = await fetch(LOG_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },   // plain text keeps this a simple cross-site request (no preflight)
+      body: JSON.stringify({ key: LOG_KEY, initials: S.initials, serials: S.serials.slice() }),
+      signal: ctl.signal
+    });
+    const data = await res.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'The server did not accept it.');
+  } finally { clearTimeout(timer); }
+}
+async function runSave(box) {
+  const token = currentGo;
+  saveOutstanding = true;
+  const paint = (msg, retry) => {
+    if (token !== currentGo) return;
+    box.replaceChildren(h('p', { class: 'sub', text: msg }), retry ? h('button', { class: 'btn alt', onclick: () => runSave(box) }, 'Retry save') : null);
+  };
+  paint('Saving…');
+  try {
+    await sendLog();
+    saveOutstanding = false;
+    paint(`Saved for ${S.initials}.`);
+  } catch (err) {
+    const why = err && err.name === 'AbortError' ? 'The server took too long.' : err && err.name === 'TypeError' ? 'No connection.' : (err && err.message) || 'Unknown error.';
+    paint(`Not saved. ${why}`, true);
+  }
+}
+
 function goodScreen() {
   feedback.good();
+  const saveBox = h('div', { class: 'savebox', 'aria-live': 'polite' });
   main.append(
     h('h2', { text: 'Box is good' }),
     h('p', { class: 'sub', text: ONE ? 'The photo shows the serial that was scanned.' : `All ${ROUNDS} photos contain the serial that was scanned.` }),
     h('ul', { class: 'rounds' }, S.serials.map((s, i) => h('li', {}, ONE ? null : h('span', { text: `Round ${i + 1}` }), h('span', { class: 'serial', text: s })))),
+    saveBox,
     h('div', { class: 'actions' }, h('button', { class: 'btn light', onclick: newBox }, 'Check another box'))
   );
+  if (LOG_URL) runSave(saveBox);
 }
 
 function badScreen() {
